@@ -1,9 +1,10 @@
 from __future__ import unicode_literals, print_function, division
 from io import open
 import unicodedata
-import string
-import re
+from nltk.translate.bleu_score import SmoothingFunction, sentence_bleu
+import sys
 import random
+import numpy as np
 import torch
 import torch.nn as nn
 from torch import optim
@@ -12,14 +13,6 @@ import torch.nn.functional as F
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 MAX_LENGTH = 50  # original 40
-
-
-def filterPair(p):
-    return len(p[0].split(' ')) < MAX_LENGTH and len(p[1].split(' ')) < MAX_LENGTH
-
-
-def filterPairs(pairs):
-    return [pair for pair in pairs if filterPair(pair)]
 
 
 # Encoder
@@ -85,6 +78,7 @@ SOS_token = 0
 EOS_token = 1
 
 
+# use Lang class to keep track of the unique index of every word
 class Lang:
     def __init__(self, name):
         self.name = name
@@ -107,6 +101,8 @@ class Lang:
             self.word2count[word] += 1
 
 
+# for simplicity, we convert Unicode characters to ASCII,
+# convert everything to lowercase, and trim most punctuation
 def unicodeToAscii(s):
     return ''.join(
         c for c in unicodedata.normalize('NFD', s)
@@ -119,27 +115,55 @@ def normalizeString(s):
     return s
 
 
-def readLangs(lang1, lang2, is_train):
+# Read the data file, divide the file into several lines, and then divide the lines into pairs
+def readLangs(lang1, lang2):
     print("Reading lines...")
 
     # Read the file and split into lines
-    if is_train:
-        lines_en = open('data/train_en.txt', encoding='utf-8').read().strip().split('\n')
-        lines_vi = open('data/train_vi.txt', encoding='utf-8').read().strip().split('\n')
-    else:
-        lines_en = open('data/test_en.txt', encoding='utf-8').read().strip().split('\n')
-        lines_vi = open('data/test_vi.txt', encoding='utf-8').read().strip().split('\n')
-
-    # pairs = [[normalizeString(s) for s in l.split('\t')] for l in lines]
+    lines_train_en = open('data/train_en.txt', encoding='utf-8').read().strip().split('\n')
+    lines_train_vi = open('data/train_vi.txt', encoding='utf-8').read().strip().split('\n')
+    lines_test_en = open('data/test_en.txt', encoding='utf-8').read().strip().split('\n')
+    lines_test_vi = open('data/test_vi.txt', encoding='utf-8').read().strip().split('\n')
 
     pairs = [[ normalizeString(lines_en[0]), normalizeString(lines_vi[0])]]
     for i in range(1, len(lines_en)):
         pairs.append([ normalizeString(lines_en[i]), normalizeString(lines_vi[i]) ])
 
+    # make Lang instances，translate: English -> Vietnamese
     input_lang = Lang(lang1)
     output_lang = Lang(lang2)
 
     return input_lang, output_lang, pairs
+
+
+def readLangs2(lang1, lang2, reverse=False):
+    print("Reading lines...")
+
+    # Read the file and split into lines
+    lines = open('data/%s-%s.txt' % (lang1, lang2), encoding='utf-8').\
+        read().strip().split('\n')
+
+    # Split every line into pairs and normalize
+    pairs = [[normalizeString(s) for s in l.split('\t')] for l in lines]
+
+    # Reverse pairs, make Lang instances
+    if reverse:
+        pairs = [list(reversed(p)) for p in pairs]
+        input_lang = Lang(lang2)
+        output_lang = Lang(lang1)
+    else:
+        input_lang = Lang(lang1)
+        output_lang = Lang(lang2)
+
+    return input_lang, output_lang, pairs
+
+
+def filterPair(p):
+    return len(p[0].split(' ')) < MAX_LENGTH and len(p[1].split(' ')) < MAX_LENGTH
+
+
+def filterPairs(pairs):
+    return [pair for pair in pairs if filterPair(pair)]
 
 
 def prepareData(lang1, lang2, is_train):
