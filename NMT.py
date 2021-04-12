@@ -12,6 +12,7 @@ import torch.nn.functional as F
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# define max length for filtering
 MAX_LENGTH = 50  # original 40
 
 
@@ -125,19 +126,9 @@ def readLangs(lang1, lang2):
     lines_test_en = open('data/test_en.txt', encoding='utf-8').read().strip().split('\n')
     lines_test_vi = open('data/test_vi.txt', encoding='utf-8').read().strip().split('\n')
 
-    # pairs = [[normalizeString(s) for s in l.split('\t')] for l in lines]
-    pairs = [[normalizeString(s) for s in l] for l in lines_train_en]
-
-    ''''''
     # split every line into pairs and normalize
-    pairs_train = [[normalizeString(lines_train_en[0]), normalizeString(lines_train_vi[0])]]
-    for i in range(1, len(lines_train_en)):
-        pairs_train.append([normalizeString(lines_train_en[i]), normalizeString(lines_train_vi[i])])
-
-    pairs_test = [[normalizeString(lines_test_en[0]), normalizeString(lines_test_vi[0])]]
-    for i in range(1, len(lines_test_en)):
-        pairs_test.append([normalizeString(lines_test_en[i]), normalizeString(lines_test_vi[i])])
-    ''''''
+    pairs_train = [[normalizeString(lines_train_en[i]), normalizeString(lines_train_vi[i])] for i in range(len(lines_train_en))]
+    pairs_test = [[normalizeString(lines_test_en[i]), normalizeString(lines_test_vi[i])] for i in range(len(lines_test_en))]
 
     # make Lang instances，translate: English -> Vietnamese
     input_lang = Lang(lang1)
@@ -146,28 +137,7 @@ def readLangs(lang1, lang2):
     return input_lang, output_lang, pairs_train, pairs_test
 
 
-def readLangs2(lang1, lang2, reverse=False):
-    print("Reading lines...")
-
-    # Read the file and split into lines
-    lines = open('data/%s-%s.txt' % (lang1, lang2), encoding='utf-8').\
-        read().strip().split('\n')
-
-    # Split every line into pairs and normalize
-    pairs = [[normalizeString(s) for s in l.split('\t')] for l in lines]
-
-    # Reverse pairs, make Lang instances
-    if reverse:
-        pairs = [list(reversed(p)) for p in pairs]
-        input_lang = Lang(lang2)
-        output_lang = Lang(lang1)
-    else:
-        input_lang = Lang(lang1)
-        output_lang = Lang(lang2)
-
-    return input_lang, output_lang, pairs
-
-
+# Trim the dataset to only relatively short and simple sentences
 def filterPair(p):
     return len(p[0].split(' ')) < MAX_LENGTH and len(p[1].split(' ')) < MAX_LENGTH
 
@@ -176,8 +146,8 @@ def filterPairs(pairs):
     return [pair for pair in pairs if filterPair(pair)]
 
 
-def prepareData(lang1, lang2, is_train):
-    input_lang, output_lang, pairs = readLangs(lang1, lang2, is_train)
+def prepareData(lang1, lang2):
+    input_lang, output_lang, pairs_train, pairs_test = readLangs(lang1, lang2)
     print("Read %s sentence pairs" % len(pairs))
     pairs = filterPairs(pairs)
     print("%s sentence pairs after filtering" % len(pairs))
