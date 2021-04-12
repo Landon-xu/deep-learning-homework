@@ -125,15 +125,25 @@ def readLangs(lang1, lang2):
     lines_test_en = open('data/test_en.txt', encoding='utf-8').read().strip().split('\n')
     lines_test_vi = open('data/test_vi.txt', encoding='utf-8').read().strip().split('\n')
 
-    pairs = [[ normalizeString(lines_en[0]), normalizeString(lines_vi[0])]]
-    for i in range(1, len(lines_en)):
-        pairs.append([ normalizeString(lines_en[i]), normalizeString(lines_vi[i]) ])
+    # pairs = [[normalizeString(s) for s in l.split('\t')] for l in lines]
+    pairs = [[normalizeString(s) for s in l] for l in lines_train_en]
+
+    ''''''
+    # split every line into pairs and normalize
+    pairs_train = [[normalizeString(lines_train_en[0]), normalizeString(lines_train_vi[0])]]
+    for i in range(1, len(lines_train_en)):
+        pairs_train.append([normalizeString(lines_train_en[i]), normalizeString(lines_train_vi[i])])
+
+    pairs_test = [[normalizeString(lines_test_en[0]), normalizeString(lines_test_vi[0])]]
+    for i in range(1, len(lines_test_en)):
+        pairs_test.append([normalizeString(lines_test_en[i]), normalizeString(lines_test_vi[i])])
+    ''''''
 
     # make Lang instances，translate: English -> Vietnamese
     input_lang = Lang(lang1)
     output_lang = Lang(lang2)
 
-    return input_lang, output_lang, pairs
+    return input_lang, output_lang, pairs_train, pairs_test
 
 
 def readLangs2(lang1, lang2, reverse=False):
