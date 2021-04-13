@@ -10,67 +10,12 @@ import torch.nn as nn
 from torch import optim
 import torch.nn.functional as F
 
+# Citation:
+# https://pytorch.org/tutorials/intermediate/seq2seq_translation_tutorial.html
+# https://www.programcreek.com/python/example/100048/nltk.translate.bleu_score.SmoothingFunction
+
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# define max length for filtering
-MAX_LENGTH = 50  # original 40
-
-
-# Encoder
-class EncoderRNN(nn.Module):
-    def __init__(self, input_size, hidden_size):
-        super(EncoderRNN, self).__init__()
-        self.hidden_size = hidden_size
-
-        self.embedding = nn.Embedding(input_size, hidden_size)
-        self.gru = nn.GRU(hidden_size, hidden_size)
-
-    def forward(self, input, hidden):
-        embedded = self.embedding(input).view(1, 1, -1)
-        output = embedded
-        output, hidden = self.gru(output, hidden)
-        return output, hidden
-
-    def initHidden(self):
-        return torch.zeros(1, 1, self.hidden_size, device=device)
-
-
-# Attention Decoder
-class AttnDecoderRNN(nn.Module):
-    def __init__(self, hidden_size, output_size, dropout_p=0.1, max_length=MAX_LENGTH):
-        super(AttnDecoderRNN, self).__init__()
-        self.hidden_size = hidden_size
-        self.output_size = output_size
-        self.dropout_p = dropout_p
-        self.max_length = max_length
-
-        self.embedding = nn.Embedding(self.output_size, self.hidden_size)
-        self.attn = nn.Linear(self.hidden_size * 2, self.max_length)
-        self.attn_combine = nn.Linear(self.hidden_size * 2, self.hidden_size)
-        self.dropout = nn.Dropout(self.dropout_p)
-        self.gru = nn.GRU(self.hidden_size, self.hidden_size)
-        self.out = nn.Linear(self.hidden_size, self.output_size)
-
-    def forward(self, input, hidden, encoder_outputs):
-        embedded = self.embedding(input).view(1, 1, -1)
-        embedded = self.dropout(embedded)
-
-        attn_weights = F.softmax(
-            self.attn(torch.cat((embedded[0], hidden[0]), 1)), dim=1)
-        attn_applied = torch.bmm(attn_weights.unsqueeze(0),
-                                 encoder_outputs.unsqueeze(0))
-
-        output = torch.cat((embedded[0], attn_applied[0]), 1)
-        output = self.attn_combine(output).unsqueeze(0)
-
-        output = F.relu(output)
-        output, hidden = self.gru(output, hidden)
-
-        output = F.log_softmax(self.out(output[0]), dim=1)
-        return output, hidden, attn_weights
-
-    def initHidden(self):
-        return torch.zeros(1, 1, self.hidden_size, device=device)
 
 
 '''Loading data files'''
@@ -137,7 +82,11 @@ def readLangs(lang1, lang2):
     return input_lang, output_lang, pairs_train, pairs_test
 
 
-# Trim the dataset to only relatively short and simple sentences
+# define max length for filtering
+MAX_LENGTH = 50  # original 40
+
+
+# trim the dataset to only relatively short and simple sentences
 def filterPair(p):
     return len(p[0].split(' ')) < MAX_LENGTH and len(p[1].split(' ')) < MAX_LENGTH
 
@@ -146,18 +95,103 @@ def filterPairs(pairs):
     return [pair for pair in pairs if filterPair(pair)]
 
 
+# the complete process of preparing the data
 def prepareData(lang1, lang2):
+    # read text file and split into lines, split lines into pairs, and normalize
     input_lang, output_lang, pairs_train, pairs_test = readLangs(lang1, lang2)
-    print("Read %s sentence pairs" % len(pairs))
-    pairs = filterPairs(pairs)
-    print("%s sentence pairs after filtering" % len(pairs))
-    for pair in pairs:
+    print("Read %s sentence pairs" % len(pairs_train))
+    print("Read %s sentence pairs" % len(pairs_test))
+
+    # filter by length
+    pairs_train = filterPairs(pairs_train)
+    pairs_test = filterPairs(pairs_test)
+    print("Trimmed to %s training sentence pairs" % len(pairs_train))
+    print("Trimmed to %s testing sentence pairs" % len(pairs_test))
+    print("Counting words...")
+
+    # create a list of words in a sentence in pairs
+    for pair in pairs_train:
         input_lang.addSentence(pair[0])
         output_lang.addSentence(pair[1])
-    return input_lang, output_lang, pairs
+
+    for pair in pairs_test:
+        input_lang.addSentence(pair[0])
+        output_lang.addSentence(pair[1])
+
+    # display the number of word pairs
+    print("Counted words:")
+    print(input_lang.name, input_lang.n_words)
+    print(output_lang.name, output_lang.n_words)
+
+    return input_lang, output_lang, pairs_train, pairs_test
+
+
+'''Seq2Seq model'''
+
+
+# Encoder
+# For each input word, the encoder outputs a vector and a hidden state,
+# and uses the hidden state for the next input word
+class EncoderRNN(nn.Module):
+    def __init__(self, input_size, hidden_size):
+        super(EncoderRNN, self).__init__()
+        self.hidden_size = hidden_size
+
+        self.embedding = nn.Embedding(input_size, hidden_size)
+        self.gru = nn.GRU(hidden_size, hidden_size)
+
+    def forward(self, input, hidden):
+        embedded = self.embedding(input).view(1, 1, -1)
+        output = embedded
+        output, hidden = self.gru(output, hidden)
+        return output, hidden
+
+    def initHidden(self):
+        return torch.zeros(1, 1, self.hidden_size, device=device)
+
+
+# Attention Decoder
+# Use encoder to output vector and output word sequence to create translation
+class AttnDecoderRNN(nn.Module):
+    def __init__(self, hidden_size, output_size, dropout_p=0.1, max_length=MAX_LENGTH):
+        super(AttnDecoderRNN, self).__init__()
+        self.hidden_size = hidden_size
+        self.output_size = output_size
+        self.dropout_p = dropout_p
+        self.max_length = max_length
+
+        self.embedding = nn.Embedding(self.output_size, self.hidden_size)
+        self.attn = nn.Linear(self.hidden_size * 2, self.max_length)
+        self.attn_combine = nn.Linear(self.hidden_size * 2, self.hidden_size)
+        self.dropout = nn.Dropout(self.dropout_p)
+        self.gru = nn.GRU(self.hidden_size, self.hidden_size)
+        self.out = nn.Linear(self.hidden_size, self.output_size)
+
+    def forward(self, input, hidden, encoder_outputs):
+        embedded = self.embedding(input).view(1, 1, -1)
+        embedded = self.dropout(embedded)
+
+        attn_weights = F.softmax(
+            self.attn(torch.cat((embedded[0], hidden[0]), 1)), dim=1)
+        attn_applied = torch.bmm(attn_weights.unsqueeze(0),
+                                 encoder_outputs.unsqueeze(0))
+
+        output = torch.cat((embedded[0], attn_applied[0]), 1)
+        output = self.attn_combine(output).unsqueeze(0)
+
+        output = F.relu(output)
+        output, hidden = self.gru(output, hidden)
+
+        output = F.log_softmax(self.out(output[0]), dim=1)
+        return output, hidden, attn_weights
+
+    def initHidden(self):
+        return torch.zeros(1, 1, self.hidden_size, device=device)
 
 
 '''Training'''
+
+
 # Preparing Training Data
 def indexesFromSentence(lang, sentence):
     return [lang.word2index[word] for word in sentence.split(' ')]
@@ -170,33 +204,27 @@ def tensorFromSentence(lang, sentence):
 
 
 def tensorsFromPair(input_lang, output_lang, pair):
-    input_tensor = tensorFromSentence(input_lang, pair[0])
-    target_tensor = tensorFromSentence(output_lang, pair[1])
-    return (input_tensor, target_tensor)
-
-
-# # Produce Train Dataset
-# input_lang, output_lang, pairs = prepareData('En', 'Vi', is_train=True)
-# train_pairs = [tensorsFromPair(input_lang, output_lang, pairs[i]) for i in range(len(pairs))]
-
-# # Produce Test Dataset
-# input_lang, output_lang, pairs = prepareData('En', 'Vi', is_train=False)
-# test_pairs = [tensorsFromPair(input_lang, output_lang, pairs[i]) for i in range(len(pairs))]
+    input_tensor = tensorFromSentence(input_lang, pair[0])  # input_tensor: the index of the word in the input sentence
+    target_tensor = tensorFromSentence(output_lang, pair[1])  # target_tensor: the index of the word in the target sentence
+    return input_tensor, target_tensor
 
 
 # Training the Model
-teacher_forcing_ratio = 0.5  # original 0.3
+teacher_forcing_ratio = 0.5  # using teacher forcing leads to converge faster
 
 
 def train(input_tensor, target_tensor, encoder, decoder, encoder_optimizer, decoder_optimizer,
           criterion, max_length=MAX_LENGTH):
-
     encoder_hidden = encoder.initHidden()
+
     encoder_optimizer.zero_grad()
     decoder_optimizer.zero_grad()
+
     input_length = input_tensor.size(0)
     target_length = target_tensor.size(0)
+
     encoder_outputs = torch.zeros(max_length, encoder.hidden_size, device=device)
+
     loss = 0
 
     for ei in range(input_length):
@@ -204,7 +232,9 @@ def train(input_tensor, target_tensor, encoder, decoder, encoder_optimizer, deco
         encoder_outputs[ei] = encoder_output[0, 0]
 
     decoder_input = torch.tensor([[SOS_token]], device=device)
+
     decoder_hidden = encoder_hidden
+
     use_teacher_forcing = True if random.random() < teacher_forcing_ratio else False
 
     if use_teacher_forcing:
@@ -234,46 +264,134 @@ def train(input_tensor, target_tensor, encoder, decoder, encoder_optimizer, deco
     return loss.item() / target_length
 
 
-def trainIters(train_pairs, encoder, decoder, n_iters, print_every=1000, learning_rate=0.01):
+def trainIters(pairs_train, encoder, decoder, n_iters, print_every=2000, learning_rate=0.01):
     print_loss_total = 0  # Reset every print_every
 
-    encoder_optimizer = optim.SGD(encoder.parameters(), lr=learning_rate)
+    encoder_optimizer = optim.SGD(encoder.parameters(), lr=learning_rate)  # Initialize optimizers
     decoder_optimizer = optim.SGD(decoder.parameters(), lr=learning_rate)
     criterion = nn.NLLLoss()
 
-    print("Training Starts...")
+    print("Training...")
 
     for iter in range(1, n_iters + 1):
-        training_pair = train_pairs[iter - 1]
+        training_pair = pairs_train[iter - 1]
         input_tensor = training_pair[0]
         target_tensor = training_pair[1]
 
         loss = train(input_tensor, target_tensor, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion)
         print_loss_total += loss
 
-        if iter % print_every == 0:
+        if iter % print_every == 0:  # calculate and display loss
             print_loss_avg = print_loss_total / print_every
             print_loss_total = 0
-            print('Iterations & Loss: {}\t{:.5f}'.format(iter, print_loss_avg))
+            print('Loss %d: %.6f' % (iter, print_loss_avg))
 
 
-def start_train():
-    train_iteration = 30000
-    input_lang, output_lang, pairs = prepareData('En', 'Vi', is_train=True)
+# start training process and save training model
+def start_train(encoder1, attn_decoder1, input_lang, output_lang, pairs):
+    train_iteration = 35000
+
     train_pairs = [tensorsFromPair(input_lang, output_lang, random.choice(pairs)) for i in range(train_iteration)]
 
-    # Training and Evaluating
-    hidden_size = 512  # original 256
-    encoder1 = EncoderRNN(input_lang.n_words, hidden_size).to(device)
-    attn_decoder1 = AttnDecoderRNN(hidden_size, output_lang.n_words, dropout_p=0.1).to(device)
+    trainIters(train_pairs, encoder1, attn_decoder1, n_iters=train_iteration, print_every=2000)
 
-    trainIters(train_pairs, encoder1, attn_decoder1, n_iters=train_iteration, print_every=1000)
-
-    # save training model
-    torch.save(encoder1.state_dict(), './model/encoder.pth')
-    torch.save(attn_decoder1.state_dict(), './model/attn_decoder.pth')
-    print("Models saved in files: './model/encoder.pth' and './model/attn_decoder.pth'")
+    # save the training model
+    print('Finished training')
+    torch.save(encoder1.state_dict(), './model/encoderRNN.pth')
+    torch.save(attn_decoder1.state_dict(), './model/attnDecoderRNN.pth')
 
 
-start_train()
+'''Evaluation'''
 
+
+def evaluate(encoder, decoder, sentence, input_lang, output_lang, max_length = MAX_LENGTH):
+    with torch.no_grad():
+        input_tensor = tensorFromSentence(input_lang, sentence)
+        input_length = input_tensor.size()[0]
+        encoder_hidden = encoder.initHidden()
+
+        encoder_outputs = torch.zeros(max_length, encoder.hidden_size, device=device)
+
+        for ei in range(input_length):
+            encoder_output, encoder_hidden = encoder(input_tensor[ei], encoder_hidden)
+            encoder_outputs[ei] += encoder_output[0, 0]
+
+        decoder_input = torch.tensor([[SOS_token]], device=device)  # SOS
+
+        decoder_hidden = encoder_hidden
+
+        decoded_words = []
+        decoder_attentions = torch.zeros(max_length, max_length)
+
+        for di in range(max_length):
+            decoder_output, decoder_hidden, decoder_attention = decoder(
+                decoder_input, decoder_hidden, encoder_outputs)
+            decoder_attentions[di] = decoder_attention.data
+            topv, topi = decoder_output.data.topk(1)
+            if topi.item() == EOS_token:
+                decoded_words.append('<EOS>')
+                break
+            else:
+                decoded_words.append(output_lang.index2word[topi.item()])
+
+            decoder_input = topi.squeeze().detach()
+
+        return decoded_words, decoder_attentions[:di + 1]
+
+
+'''Testing'''
+
+
+def start_test(encoder, attn_decoder, input_lang, output_lang, pairs):
+    bleu_score = calculate_Bleu(encoder, attn_decoder, pairs, input_lang, output_lang)  # calculate Bleu score
+    print("Average BLEU: " + str(bleu_score))
+
+
+def calculate_Bleu(encoder, decoder, pairs, input_lang, output_lang):
+    bleu_score = []  # initialize list, which is used to store every bleu score
+
+    for pair in pairs:
+        try:
+            output_words, attentions = evaluate(encoder, decoder, pair[0], input_lang, output_lang)
+        except RuntimeError:
+            pass
+        output_sentence = ' '.join(output_words)
+        # calculate bleu score for each pair
+        bleu_score.append(sentence_bleu([output_sentence], pair[1], smoothing_function=SmoothingFunction().method1))
+
+    bleu_mean = np.mean(bleu_score)  # calculate the average of all bleu scores
+    return bleu_mean
+
+
+'''get the keyword ('train', 'test' or 'translation') from the console'''
+
+
+input_lang, output_lang, train_pairs, test_pairs = prepareData('En', 'Vi')
+
+hidden_size = 512  # has 512 hidden nodes
+encoder = EncoderRNN(input_lang.n_words, hidden_size).to(device)
+attn_decoder = AttnDecoderRNN(hidden_size, output_lang.n_words, dropout_p=0.1).to(device)
+
+if len(sys.argv) == 0 or sys.argv[1] == "train":
+    start_train(encoder, attn_decoder, input_lang, output_lang, train_pairs)
+
+elif sys.argv[1] == "test":
+    print('Loading model...')
+    encoder.load_state_dict(torch.load('./model/encoderRNN.pth'))
+    attn_decoder.load_state_dict(torch.load('./model/attnDecoderRNN.pth'))
+
+    start_test(encoder, attn_decoder, input_lang, output_lang, test_pairs)
+
+elif sys.argv[1] == "translate":
+    print('Loading model...')
+    encoder.load_state_dict(torch.load('./model/encoderRNN.pth'))
+    attn_decoder.load_state_dict(torch.load('./model/attnDecoderRNN.pth'))
+
+    while True:
+        print("Note: You need to enter \"ctrl + C\" to end the translation process.")
+        original_text = input("> ")
+        original_text = str(original_text)  # transform the input into string
+        original_text = unicodeToAscii(original_text.lower().strip())  # normalize
+        decoded_words, _ = evaluate(encoder, attn_decoder, original_text, input_lang, output_lang)
+        translation = ' '.join(decoded_words)
+        print(translation)
