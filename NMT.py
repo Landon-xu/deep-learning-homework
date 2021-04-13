@@ -63,8 +63,6 @@ def normalizeString(s):
 
 # Read the data file, divide the file into several lines, and then divide the lines into pairs
 def readLangs(lang1, lang2):
-    print("Reading lines...")
-
     # Read the file and split into lines
     lines_train_en = open('data/train_en.txt', encoding='utf-8').read().strip().split('\n')
     lines_train_vi = open('data/train_vi.txt', encoding='utf-8').read().strip().split('\n')
@@ -83,7 +81,7 @@ def readLangs(lang1, lang2):
 
 
 # define max length for filtering
-MAX_LENGTH = 50  # original 40
+MAX_LENGTH = 50  # previous 40
 
 
 # trim the dataset to only relatively short and simple sentences
@@ -96,18 +94,13 @@ def filterPairs(pairs):
 
 
 # the complete process of preparing the data
-def prepareData(lang1, lang2):
+def prepareData(lang1, lang2, flag):
     # read text file and split into lines, split lines into pairs, and normalize
     input_lang, output_lang, pairs_train, pairs_test = readLangs(lang1, lang2)
-    print("Read %s sentence pairs" % len(pairs_train))
-    print("Read %s sentence pairs" % len(pairs_test))
 
     # filter by length
     pairs_train = filterPairs(pairs_train)
     pairs_test = filterPairs(pairs_test)
-    print("Trimmed to %s training sentence pairs" % len(pairs_train))
-    print("Trimmed to %s testing sentence pairs" % len(pairs_test))
-    print("Counting words...")
 
     # create a list of words in a sentence in pairs
     for pair in pairs_train:
@@ -118,10 +111,15 @@ def prepareData(lang1, lang2):
         input_lang.addSentence(pair[0])
         output_lang.addSentence(pair[1])
 
-    # display the number of word pairs
-    print("Counted words:")
-    print(input_lang.name, input_lang.n_words)
-    print(output_lang.name, output_lang.n_words)
+    # display the number of sentence pairs and word pairs when training
+    if flag == True:
+        print("Read %s training sentence pairs" % len(pairs_train))
+        print("Read %s testing sentence pairs" % len(pairs_test))
+        print("Trimmed to %s training sentence pairs" % len(pairs_train))
+        print("Trimmed to %s testing sentence pairs" % len(pairs_test))
+        print("Counted words:")
+        print(input_lang.name, input_lang.n_words)
+        print(output_lang.name, output_lang.n_words)
 
     return input_lang, output_lang, pairs_train, pairs_test
 
@@ -366,17 +364,21 @@ def calculate_Bleu(encoder, decoder, pairs, input_lang, output_lang):
 '''get the keyword ('train', 'test' or 'translation') from the console'''
 
 
-input_lang, output_lang, train_pairs, test_pairs = prepareData('En', 'Vi')
-
-hidden_size = 512  # has 512 hidden nodes
-encoder = EncoderRNN(input_lang.n_words, hidden_size).to(device)
-attn_decoder = AttnDecoderRNN(hidden_size, output_lang.n_words, dropout_p=0.1).to(device)
-
 if len(sys.argv) == 0 or sys.argv[1] == "train":
+    input_lang, output_lang, train_pairs, test_pairs = prepareData('En', 'Vi', True)
+    hidden_size = 512  # has 512 hidden nodes
+    encoder = EncoderRNN(input_lang.n_words, hidden_size).to(device)
+    attn_decoder = AttnDecoderRNN(hidden_size, output_lang.n_words, dropout_p=0.1).to(device)
     start_train(encoder, attn_decoder, input_lang, output_lang, train_pairs)
 
 elif sys.argv[1] == "test":
     print('Loading model...')
+
+    input_lang, output_lang, train_pairs, test_pairs = prepareData('En', 'Vi', False)  # False parameter means don't print data processing info
+    hidden_size = 512
+    encoder = EncoderRNN(input_lang.n_words, hidden_size).to(device)
+    attn_decoder = AttnDecoderRNN(hidden_size, output_lang.n_words, dropout_p=0.1).to(device)
+
     encoder.load_state_dict(torch.load('./model/encoderRNN.pth'))
     attn_decoder.load_state_dict(torch.load('./model/attnDecoderRNN.pth'))
 
@@ -384,11 +386,17 @@ elif sys.argv[1] == "test":
 
 elif sys.argv[1] == "translate":
     print('Loading model...')
+    input_lang, output_lang, train_pairs, test_pairs = prepareData('En', 'Vi', False)
+    hidden_size = 512
+    encoder = EncoderRNN(input_lang.n_words, hidden_size).to(device)
+    attn_decoder = AttnDecoderRNN(hidden_size, output_lang.n_words, dropout_p=0.1).to(device)
+
     encoder.load_state_dict(torch.load('./model/encoderRNN.pth'))
     attn_decoder.load_state_dict(torch.load('./model/attnDecoderRNN.pth'))
 
+    print("Note: You need to enter \"ctrl + C\" to end the translation process.")
+
     while True:
-        print("Note: You need to enter \"ctrl + C\" to end the translation process.")
         original_text = input("> ")
         original_text = str(original_text)  # transform the input into string
         original_text = unicodeToAscii(original_text.lower().strip())  # normalize
